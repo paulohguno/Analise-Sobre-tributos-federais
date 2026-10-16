@@ -7,6 +7,7 @@
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <script src="src/mapa-geo.js"></script>
   <style>
     body { background-color: #0f172a; color: #f8fafc; font-family: 'Inter', system-ui, sans-serif; }
     .card { background-color: #1e293b; border: 1px solid #334155; border-radius: 0.75rem; }
@@ -165,6 +166,24 @@
       </div>
     </section>
 
+    <!-- ITEM C: MAPA E RANKING COM MÉDIA E MEDIANA -->
+    <section class="grid lg:grid-cols-2 gap-6">
+      <div class="card p-5">
+        <span class="text-xs font-bold text-emerald-400 uppercase">Item c) Média e Mediana no Mapa</span>
+        <h3 class="text-base font-bold text-white" id="mm-titulo">Média mensal de arrecadação por UF</h3>
+        <p class="text-xs text-slate-400 mt-1 mb-3">Passe o mouse num estado para ver o valor.</p>
+        <div class="flex flex-wrap gap-x-4 gap-y-2 text-xs text-slate-300 mb-2" id="mm-legenda"></div>
+        <svg id="mm-mapa" class="w-full h-auto block" role="img" aria-label="Mapa do Brasil por faixa de arrecadação em relação à mediana e à média"></svg>
+      </div>
+      <div class="card p-5">
+        <span class="text-xs font-bold text-emerald-400 uppercase">Item c) Ranking com Linhas de Referência</span>
+        <h3 class="text-base font-bold text-white">Média mensal por UF vs. Mediana e Média gerais</h3>
+        <p class="text-xs text-slate-400 mt-1 mb-3">Escala linear em bilhões de reais.</p>
+        <svg id="mm-barras" class="w-full h-auto block" role="img" aria-label="Ranking dos estados com linhas da mediana e da média"></svg>
+      </div>
+    </section>
+    <div id="mm-tip" class="hidden fixed pointer-events-none z-50 bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-xs text-slate-200 shadow-xl"></div>
+
     <!-- GRÁFICOS DINÂMICOS -->
     <section class="grid lg:grid-cols-2 gap-6">
       <div class="card p-5">
@@ -315,6 +334,108 @@
       return { n, sum, mean, median, q1, q3, p10, p90, minObj, maxObj, amp, iiq, variance, std, cv, skew, lsTukey, outliers };
     }
 
+    // Item c) Mapa + ranking: média mensal de cada UF comparada com a mediana e a média gerais
+    const NOMES_UF = {AC:'Acre',AL:'Alagoas',AM:'Amazonas',AP:'Amapá',BA:'Bahia',CE:'Ceará',DF:'Distrito Federal',ES:'Espírito Santo',GO:'Goiás',MA:'Maranhão',MG:'Minas Gerais',MS:'Mato Grosso do Sul',MT:'Mato Grosso',PA:'Pará',PB:'Paraíba',PE:'Pernambuco',PI:'Piauí',PR:'Paraná',RJ:'Rio de Janeiro',RN:'Rio Grande do Norte',RO:'Rondônia',RR:'Roraima',RS:'Rio Grande do Sul',SC:'Santa Catarina',SE:'Sergipe',SP:'São Paulo',TO:'Tocantins'};
+    const MM_CORES = { 1: '#184f95', 2: '#3987e5', 3: '#b7d3f6' };
+    const MM_TEXTO = { 1: '#ffffff', 2: '#ffffff', 3: '#0f172a' };
+    const MM_REF_MEDIANA = '#f59e0b', MM_REF_MEDIA = '#fb7185';
+
+    function desenharMapaMediaMediana(silverRows, st) {
+      const NS = 'http://www.w3.org/2000/svg';
+      const el = (tag, attrs, parent) => { const e = document.createElementNS(NS, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); if (parent) parent.appendChild(e); return e; };
+      const fmt = v => v >= 1e9 ? 'R$ ' + (v / 1e9).toLocaleString('pt-BR', { maximumFractionDigits: 2 }) + ' bi'
+                                : 'R$ ' + Math.round(v / 1e6).toLocaleString('pt-BR') + ' mi';
+
+      const soma = {}, qtd = {};
+      silverRows.forEach(r => { soma[r.uf] = (soma[r.uf] || 0) + r.total; qtd[r.uf] = (qtd[r.uf] || 0) + 1; });
+      const media = {};
+      Object.keys(soma).forEach(uf => media[uf] = soma[uf] / qtd[uf]);
+      const ufs = Object.keys(media).sort((a, b) => media[b] - media[a]);
+
+      const faixas = [
+        { id: 1, nome: 'Abaixo da mediana' },
+        { id: 2, nome: 'Entre a mediana e a média' },
+        { id: 3, nome: 'Acima da média' }
+      ];
+      const faixaDe = v => v >= st.mean ? faixas[2] : v >= st.median ? faixas[1] : faixas[0];
+      const cont = { 1: 0, 2: 0, 3: 0 };
+      ufs.forEach(uf => cont[faixaDe(media[uf]).id]++);
+
+      document.getElementById('mm-titulo').innerText = `Só ${cont[3]} de ${ufs.length} estados arrecadam acima da média`;
+      document.getElementById('mm-legenda').innerHTML = faixas.map(f =>
+        `<span class="inline-flex items-center gap-1.5"><i class="inline-block w-3.5 h-3.5 rounded-sm" style="background:${MM_CORES[f.id]}"></i>${f.nome} (${cont[f.id]})</span>`).join('') +
+        `<span class="inline-flex items-center gap-1.5"><i class="inline-block w-3.5 h-0.5" style="background:${MM_REF_MEDIANA}"></i>Mediana ${fmt(st.median)}</span>` +
+        `<span class="inline-flex items-center gap-1.5"><i class="inline-block w-3.5 h-0.5" style="background:${MM_REF_MEDIA}"></i>Média ${fmt(st.mean)}</span>`;
+
+      const tip = document.getElementById('mm-tip');
+      const mover = ev => {
+        tip.style.left = Math.min(ev.clientX + 14, innerWidth - tip.offsetWidth - 8) + 'px';
+        tip.style.top = Math.max(8, Math.min(ev.clientY + 14, innerHeight - tip.offsetHeight - 8)) + 'px';
+      };
+      const destacar = (uf, on) => document.querySelectorAll(`[data-mm-uf="${uf}"]`).forEach(n => {
+        n.style.stroke = on ? '#f8fafc' : ''; n.style.strokeWidth = on ? '2' : '';
+      });
+      const hover = (node, uf) => {
+        node.style.cursor = 'pointer';
+        node.addEventListener('pointerenter', ev => {
+          tip.innerHTML = `<strong class="text-white">${NOMES_UF[uf] || uf} (${uf})</strong><br>Média mensal: <strong>${fmt(media[uf])}</strong><br>${faixaDe(media[uf]).nome}<br>${ufs.indexOf(uf) + 1}º lugar de ${ufs.length}`;
+          tip.classList.remove('hidden'); mover(ev); destacar(uf, true);
+        });
+        node.addEventListener('pointermove', mover);
+        node.addEventListener('pointerleave', () => { tip.classList.add('hidden'); destacar(uf, false); });
+      };
+
+      // mapa
+      const GEO = window.BR_GEO;
+      const mapa = document.getElementById('mm-mapa');
+      mapa.innerHTML = '';
+      mapa.setAttribute('viewBox', `0 0 650 ${GEO.h + 4}`);
+      const CALLOUT = { RN: [598, 158], PB: [598, 180], PE: [598, 202], AL: [598, 224], SE: [598, 246], ES: [540, 388], RJ: [488, 452], DF: [402, 292] };
+      const gForma = el('g', {}, mapa), gRot = el('g', {}, mapa);
+      Object.keys(GEO.ufs).forEach(uf => {
+        if (media[uf] === undefined) return;
+        const f = faixaDe(media[uf]);
+        const p = el('path', { d: GEO.ufs[uf].d, fill: MM_CORES[f.id], stroke: '#1e293b', 'stroke-width': 1, 'data-mm-uf': uf }, gForma);
+        hover(p, uf);
+        const [cx, cy] = GEO.ufs[uf].c;
+        const estilo = 'font: 600 11px system-ui, sans-serif; pointer-events: none;';
+        if (CALLOUT[uf]) {
+          const [lx, ly] = CALLOUT[uf];
+          el('line', { x1: cx, y1: cy, x2: lx - 3, y2: ly - 4, stroke: '#94a3b8', 'stroke-width': 0.8 }, gRot);
+          el('text', { x: lx, y: ly, fill: '#e2e8f0', style: estilo }, gRot).textContent = uf;
+        } else {
+          el('text', { x: cx, y: cy + 4, 'text-anchor': 'middle', fill: MM_TEXTO[f.id], style: estilo }, gRot).textContent = uf;
+        }
+      });
+
+      // ranking
+      const svg = document.getElementById('mm-barras');
+      svg.innerHTML = '';
+      const W = 560, rowH = 19, topo = 38, esq = 34, dir = 70, H = topo + ufs.length * rowH + 22;
+      svg.setAttribute('viewBox', `0 0 ${W} ${H}`);
+      const maxV = Math.ceil(media[ufs[0]] / 10e9) * 10e9;
+      const x = v => esq + (v / maxV) * (W - esq - dir);
+      const eixo = 'font: 500 11px ui-monospace, Menlo, monospace;';
+      for (let g = 0; g <= maxV; g += 10e9) {
+        el('line', { x1: x(g), x2: x(g), y1: topo - 6, y2: H - 20, stroke: '#334155', 'stroke-width': 1 }, svg);
+        el('text', { x: x(g), y: H - 6, 'text-anchor': 'middle', fill: '#94a3b8', style: eixo }, svg).textContent = g === 0 ? '0' : (g / 1e9) + ' bi';
+      }
+      ufs.forEach((uf, i) => {
+        const v = media[uf], f = faixaDe(v), y = topo + i * rowH;
+        const g = el('g', {}, svg);
+        el('rect', { x: 0, y: y, width: W, height: rowH, fill: 'transparent' }, g);
+        el('text', { x: esq - 6, y: y + rowH / 2 + 4, 'text-anchor': 'end', fill: '#cbd5e1', style: 'font: 600 11.5px system-ui, sans-serif;' }, g).textContent = uf;
+        const w = Math.max(2, x(v) - esq);
+        el('rect', { x: esq, y: y + 3, width: w, height: rowH - 6, rx: 2, fill: MM_CORES[f.id], 'data-mm-uf': uf }, g);
+        if (i < 3) el('text', { x: esq + w + 5, y: y + rowH / 2 + 4, fill: '#94a3b8', style: eixo }, g).textContent = fmt(v);
+        hover(g, uf);
+      });
+      [[st.median, MM_REF_MEDIANA, `Mediana ${fmt(st.median)}`, topo - 24], [st.mean, MM_REF_MEDIA, `Média ${fmt(st.mean)}`, topo - 10]].forEach(([v, cor, rotulo, ty]) => {
+        el('line', { x1: x(v), x2: x(v), y1: ty + 4, y2: H - 20, stroke: cor, 'stroke-width': 2, 'stroke-dasharray': '5 3' }, svg);
+        el('text', { x: x(v) + 5, y: ty, fill: cor, style: 'font: 700 11px system-ui, sans-serif;' }, svg).textContent = rotulo;
+      });
+    }
+
     function calcPearson(x, y) {
       const n = x.length;
       let sumX = 0, sumY = 0;
@@ -386,6 +507,7 @@
       const serieAno = Object.entries(mapAno).map(([ano, val]) => ({ ano: Number(ano), val: val / 1e9 })).sort((a, b) => a.ano - b.ano);
 
       globalState = { mensal: statsMensal, uf: statsUF };
+      desenharMapaMediaMediana(silverRows, statsMensal);
 
       const anosUnicos = serieAno.map(d => d.ano);
       document.getElementById('statusBanner').className = 'text-xs font-semibold text-emerald-400';
